@@ -1,0 +1,28 @@
+# Android / Gradle
+**/.gradle/
+**/.idea/
+**/build/
+**/local.properties
+*.iml
+*.apk
+*.aab
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Python / Jupyter
+**/.venv/
+**/venv/
+**/__pycache__/
+*.py[cod]
+**/.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.tmp
+
+# Ultralytics generated cache
+*.cache

@@ -1,0 +1,24 @@
+Traffic Sign LiteRT Export
+Classes: 58
+
+============================================================
+Model: yolo11n_320
+Input image size: 320x320
+TFLite size MiB: 10.106
+INPUT name=serving_default_args_0 shape=[1, 3, 320, 320] dtype=<class 'numpy.float32'>
+OUTPUT name=serving_default_output_0_output shape=[1, 62, 2100] dtype=<class 'numpy.float32'>
+
+============================================================
+Model: yolo11s_320
+Input image size: 320x320
+TFLite size MiB: 36.206
+INPUT name=serving_default_args_0 shape=[1, 3, 320, 320] dtype=<class 'numpy.float32'>
+OUTPUT name=serving_default_output_0_output shape=[1, 62, 2100] dtype=<class 'numpy.float32'>
+
+============================================================
+Model: yolo11s_640
+Input image size: 640x640
+TFLite size MiB: 36.278
+INPUT name=serving_default_args_0 shape=[1, 3, 640, 640] dtype=<class 'numpy.float32'>
+OUTPUT name=serving_default_output_0_output shape=[1, 62, 8400] dtype=<class 'numpy.float32'>
+

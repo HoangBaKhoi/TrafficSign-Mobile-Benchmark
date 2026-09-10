@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- Camera preview -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Bounding-box overlay -->
+    <com.example.trafficsignapp.OverlayView
+        android:id="@+id/overlayView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Thông tin realtime -->
+    <TextView
+        android:id="@+id/tvFrameInfo"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="16dp"
+        android:background="#B3000000"
+        android:padding="10dp"
+        android:text="Đang khởi động..."
+        android:textColor="#FFFFFF"
+        android:textSize="16sp" />
+
+    <!-- Chạy kiểm tra bằng bộ ảnh cố định -->
+    <Button
+        android:id="@+id/btnVerification"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="24dp"
+        android:text="RUN VERIFICATION" />
+
+</FrameLayout>
