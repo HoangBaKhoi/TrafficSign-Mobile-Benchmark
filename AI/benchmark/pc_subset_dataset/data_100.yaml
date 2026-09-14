@@ -1,4 +1,4 @@
-path: D:\Project\TrafficSignAI\android_benchmark_100\pc_subset_dataset
+path: D:\CITD\HK4\TTNT_Nhúng\Project\TrafficSign-Mobile-Benchmark\AI\benchmark\pc_subset_dataset
 train: images
 val: images
 test: images

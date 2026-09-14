@@ -35,6 +35,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnVerification:
             Button
 
+    private lateinit var btnQuantSweep:
+            Button
+
     private lateinit var cameraExecutor:
             ExecutorService
 
@@ -111,6 +114,11 @@ class MainActivity : AppCompatActivity() {
                 R.id.btnVerification
             )
 
+        btnQuantSweep =
+            findViewById(
+                R.id.btnQuantSweep
+            )
+
         previewView.scaleType =
             PreviewView
                 .ScaleType
@@ -130,6 +138,15 @@ class MainActivity : AppCompatActivity() {
             .setOnClickListener {
 
                 runOfflineVerification()
+            }
+
+        btnQuantSweep.text =
+            "RUN QUANT+DELEGATE SWEEP"
+
+        btnQuantSweep
+            .setOnClickListener {
+
+                runQuantizationSweep()
             }
 
         if (
@@ -174,6 +191,53 @@ class MainActivity : AppCompatActivity() {
 
     private fun runOfflineVerification() {
 
+        runBenchmark(
+            targetButton = btnVerification,
+            busyText = "ĐANG TEST 4 MODEL...",
+            idleText = "RUN 4-MODEL TEST",
+            infoText = "4-MODEL BENCHMARK\n100 ảnh/model\nĐang chạy tuần tự...",
+            dialogTitle = "4-model benchmark hoàn tất",
+            failureLogTag = "4-model benchmark failed"
+        ) { runner ->
+            runner.run()
+        }
+    }
+
+    // =============================
+    // QUANTIZATION x DELEGATE SWEEP (Phase 2)
+    // =============================
+
+    private fun runQuantizationSweep() {
+
+        runBenchmark(
+            targetButton = btnQuantSweep,
+            busyText = "ĐANG CHẠY QUANT+DELEGATE...",
+            idleText = "RUN QUANT+DELEGATE SWEEP",
+            infoText = "QUANTIZATION x DELEGATE SWEEP\n" +
+                    "FP32/FP16/INT8 x CPU/GPU/NNAPI\n" +
+                    "Đang chạy tuần tự (có thể mất nhiều thời gian)...",
+            dialogTitle = "Quant+Delegate sweep hoàn tất",
+            failureLogTag = "Quant+Delegate sweep failed"
+        ) { runner ->
+            runner.runQuantizationSweep()
+        }
+    }
+
+    /*
+     * Khung dùng chung cho mọi loại benchmark offline (bộ ảnh cố định, không dùng camera):
+     * khóa 2 nút bấm, đóng detector realtime để không cộng dồn RAM, chạy VerificationRunner
+     * trên cameraExecutor, rồi hiển thị kết quả/khôi phục realtime detector.
+     */
+    private fun runBenchmark(
+        targetButton: Button,
+        busyText: String,
+        idleText: String,
+        infoText: String,
+        dialogTitle: String,
+        failureLogTag: String,
+        action: (VerificationRunner) -> VerificationExportResult
+    ) {
+
         if (
             verificationRunning
         ) {
@@ -183,12 +247,11 @@ class MainActivity : AppCompatActivity() {
         verificationRunning =
             true
 
-        btnVerification
-            .isEnabled =
-            false
+        btnVerification.isEnabled = false
+        btnQuantSweep.isEnabled = false
 
-        btnVerification.text =
-            "ĐANG TEST 4 MODEL..."
+        targetButton.text =
+            busyText
 
         overlayView.setResults(
             newDetections =
@@ -202,9 +265,7 @@ class MainActivity : AppCompatActivity() {
         )
 
         tvFrameInfo.text =
-            "4-MODEL BENCHMARK\n" +
-                    "100 ảnh/model\n" +
-                    "Đang chạy tuần tự..."
+            infoText
 
         /*
          * Chạy trên cùng executor với camera.
@@ -216,7 +277,7 @@ class MainActivity : AppCompatActivity() {
 
                 /*
                  * Đóng model realtime trước benchmark
-                 * để RAM của 4 model không bị cộng thêm n640.
+                 * để RAM benchmark không bị cộng thêm n640.
                  */
                 detector?.close()
 
@@ -232,7 +293,7 @@ class MainActivity : AppCompatActivity() {
                     )
 
                 val result =
-                    runner.run()
+                    action(runner)
 
                 // Sau benchmark mở lại n640 cho camera realtime.
                 createRealtimeDetector()
@@ -242,12 +303,11 @@ class MainActivity : AppCompatActivity() {
                     verificationRunning =
                         false
 
-                    btnVerification
-                        .isEnabled =
-                        true
+                    btnVerification.isEnabled = true
+                    btnQuantSweep.isEnabled = true
 
-                    btnVerification.text =
-                        "RUN 4-MODEL TEST"
+                    targetButton.text =
+                        idleText
 
                     frameCount =
                         0
@@ -260,11 +320,11 @@ class MainActivity : AppCompatActivity() {
                             this
                         )
                         .setTitle(
-                            "4-model benchmark hoàn tất"
+                            dialogTitle
                         )
                         .setMessage(
-                            "Models: ${result.modelCount}\n" +
-                                    "Ảnh/model: ${result.imageCount}\n\n" +
+                            "Variants: ${result.modelCount}\n" +
+                                    "Ảnh/variant: ${result.imageCount}\n\n" +
 
                                     "Model summary:\n" +
                                     "${result.modelSummaryPath}\n\n" +
@@ -294,7 +354,7 @@ class MainActivity : AppCompatActivity() {
 
                 Log.e(
                     "MainActivity",
-                    "4-model benchmark failed",
+                    failureLogTag,
                     e
                 )
 
@@ -319,12 +379,11 @@ class MainActivity : AppCompatActivity() {
                     verificationRunning =
                         false
 
-                    btnVerification
-                        .isEnabled =
-                        true
+                    btnVerification.isEnabled = true
+                    btnQuantSweep.isEnabled = true
 
-                    btnVerification.text =
-                        "RUN 4-MODEL TEST"
+                    targetButton.text =
+                        idleText
 
                     AlertDialog
                         .Builder(

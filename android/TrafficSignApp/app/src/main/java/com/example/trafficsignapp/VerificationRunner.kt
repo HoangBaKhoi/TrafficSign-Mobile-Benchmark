@@ -37,6 +37,12 @@ private data class BenchmarkSample(
     val rssMb: Double
 )
 
+private data class VariantOutcome(
+    val modelSizeMb: Double,
+    val delegateLabel: String,
+    val samples: List<BenchmarkSample>
+)
+
 private data class DeviceInfo(
     val manufacturer: String,
     val model: String,
@@ -61,11 +67,78 @@ class VerificationRunner(
         private const val TAG = "VerificationRunner"
         private const val IMAGE_DIRECTORY = "benchmark_images"
         private const val WARMUP_RUNS = 5
-        private const val DELEGATE_NAME = "CPU"
         private const val MODEL_COOLDOWN_MS = 2000L
+
+        private const val CSV_HEADER_PREFIX =
+            "manufacturer,device_model,android_version,sdk_int,hardware,cpu_cores,"
+
+        private const val SUMMARY_COLUMNS =
+            "model,input_size,images,detection_rate_percent," +
+                    "mean_conf_detected_only,mean_conf_all," +
+                    "preprocess_mean_ms," +
+                    "inference_mean_ms,inference_median_ms,inference_p95_ms," +
+                    "total_mean_ms,total_median_ms,total_p95_ms,estimated_fps," +
+                    "cpu_mean_percent,cpu_median_percent,cpu_p95_percent," +
+                    "pss_mean_mb,pss_peak_mb,rss_mean_mb,rss_peak_mb," +
+                    "model_size_mb,gpu_usage_percent,delegate\n"
+
+        private const val DETAIL_COLUMNS =
+            "model,image,input_size,detections,best_class_id,best_label," +
+                    "best_confidence,best_left,best_top,best_right,best_bottom," +
+                    "preprocess_ms,inference_ms,total_ms,cpu_percent,pss_mb,rss_mb," +
+                    "model_size_mb,gpu_usage_percent,delegate\n"
+
+        private const val DETECTIONS_COLUMNS =
+            "model,image,input_size,detection_index,class_id,label,confidence," +
+                    "left,top,right,bottom,preprocess_ms,inference_ms,total_ms," +
+                    "cpu_percent,pss_mb,rss_mb,model_size_mb,gpu_usage_percent,delegate\n"
     }
 
+    // =============================
+    // 4-MODEL FP32 BASELINE (giữ nguyên hành vi cũ để so sánh được với dữ liệu đã thu thập).
+    // =============================
+
     fun run(): VerificationExportResult {
+
+        val variants =
+            ModelConfig.ALL.map { config ->
+                BenchmarkPlan(config, RuntimeConfig.CPU_1_THREAD)
+            }
+
+        return runVariants(
+            variants = variants,
+            filePrefix = "android_4model_100"
+        )
+    }
+
+    // =============================
+    // QUANTIZATION x DELEGATE SWEEP (Phase 2: FP32/FP16/INT8 x CPU/GPU/NNAPI).
+    // =============================
+
+    fun runQuantizationSweep(): VerificationExportResult {
+
+        val variants =
+            ModelConfig.QUANTIZATION_SWEEP.flatMap { config ->
+                RuntimeConfig.compatibleWith(config).map { runtime ->
+                    BenchmarkPlan(config, runtime)
+                }
+            }
+
+        return runVariants(
+            variants = variants,
+            filePrefix = "android_quant_sweep"
+        )
+    }
+
+    private data class BenchmarkPlan(
+        val model: ModelConfig,
+        val runtime: RuntimeConfig
+    )
+
+    private fun runVariants(
+        variants: List<BenchmarkPlan>,
+        filePrefix: String
+    ): VerificationExportResult {
 
         val benchmarkStart = System.nanoTime()
         val deviceInfo = getDeviceInfo()
@@ -91,282 +164,57 @@ class VerificationRunner(
             TAG,
             "Device=${deviceInfo.manufacturer} ${deviceInfo.model}, " +
                     "Android=${deviceInfo.androidVersion}, SDK=${deviceInfo.sdkInt}, " +
-                    "hardware=${deviceInfo.hardware}, cpuCores=${deviceInfo.cpuCores}"
+                    "hardware=${deviceInfo.hardware}, cpuCores=${deviceInfo.cpuCores}, " +
+                    "variants=${variants.size}"
         )
+
+        val deviceColumns =
+            listOf(
+                csvText(deviceInfo.manufacturer),
+                csvText(deviceInfo.model),
+                csvText(deviceInfo.androidVersion),
+                deviceInfo.sdkInt.toString(),
+                csvText(deviceInfo.hardware),
+                deviceInfo.cpuCores.toString()
+            )
 
         val summaryCsv = StringBuilder()
         val detailCsv = StringBuilder()
         val detectionsCsv = StringBuilder()
 
-        val deviceHeader =
-            "manufacturer,device_model,android_version,sdk_int,hardware,cpu_cores,"
+        summaryCsv.append(CSV_HEADER_PREFIX + SUMMARY_COLUMNS)
+        detailCsv.append(CSV_HEADER_PREFIX + DETAIL_COLUMNS)
+        detectionsCsv.append(CSV_HEADER_PREFIX + DETECTIONS_COLUMNS)
 
-        summaryCsv.append(
-            deviceHeader +
-                    "model,input_size,images,detection_rate_percent," +
-                    "mean_conf_detected_only,mean_conf_all," +
-                    "preprocess_mean_ms," +
-                    "inference_mean_ms,inference_median_ms,inference_p95_ms," +
-                    "total_mean_ms,total_median_ms,total_p95_ms,estimated_fps," +
-                    "cpu_mean_percent,cpu_median_percent,cpu_p95_percent," +
-                    "pss_mean_mb,pss_peak_mb,rss_mean_mb,rss_peak_mb," +
-                    "model_size_mb,gpu_usage_percent,delegate\n"
-        )
-
-        detailCsv.append(
-            deviceHeader +
-                    "model,image,input_size,detections,best_class_id,best_label," +
-                    "best_confidence,best_left,best_top,best_right,best_bottom," +
-                    "preprocess_ms,inference_ms,total_ms,cpu_percent,pss_mb,rss_mb," +
-                    "model_size_mb,gpu_usage_percent,delegate\n"
-        )
-
-        detectionsCsv.append(
-            deviceHeader +
-                    "model,image,input_size,detection_index,class_id,label,confidence," +
-                    "left,top,right,bottom,preprocess_ms,inference_ms,total_ms," +
-                    "cpu_percent,pss_mb,rss_mb,model_size_mb,gpu_usage_percent,delegate\n"
-        )
-
-        for ((modelIndex, config) in ModelConfig.ALL.withIndex()) {
+        for ((variantIndex, plan) in variants.withIndex()) {
 
             Log.d(
                 TAG,
-                "===== ${modelIndex + 1}/${ModelConfig.ALL.size}: ${config.id} ====="
+                "===== ${variantIndex + 1}/${variants.size}: " +
+                        "${plan.model.id} @ ${plan.runtime.label} ====="
             )
 
             System.gc()
             Thread.sleep(300)
 
-            val detector =
-                LiteRTDetector(
-                    context = context,
-                    config = config
+            val outcome =
+                runSingleVariant(
+                    model = plan.model,
+                    runtime = plan.runtime,
+                    imageNames = imageNames,
+                    deviceColumns = deviceColumns,
+                    detailCsv = detailCsv,
+                    detectionsCsv = detectionsCsv
                 )
 
-            val modelSizeMb = detector.getModelSizeMb()
+            appendSummaryRow(
+                summaryCsv = summaryCsv,
+                deviceColumns = deviceColumns,
+                config = plan.model,
+                outcome = outcome
+            )
 
-            val warmupBitmap = loadBitmap(imageNames.first())
-
-            repeat(WARMUP_RUNS) {
-                detector.runOnBitmap(warmupBitmap)
-                Log.d(
-                    TAG,
-                    "${config.id} warm-up ${it + 1}/$WARMUP_RUNS"
-                )
-            }
-
-            warmupBitmap.recycle()
-
-            val samples = mutableListOf<BenchmarkSample>()
-
-            for ((imageIndex, imageName) in imageNames.withIndex()) {
-
-                val bitmap = loadBitmap(imageName)
-
-                val cpuBeforeMs = Process.getElapsedCpuTime()
-                val wallBeforeNs = System.nanoTime()
-
-                val result = detector.runOnBitmap(bitmap)
-
-                val wallAfterNs = System.nanoTime()
-                val cpuAfterMs = Process.getElapsedCpuTime()
-
-                val wallElapsedMs =
-                    (wallAfterNs - wallBeforeNs) / 1_000_000.0
-
-                val cpuElapsedMs =
-                    (cpuAfterMs - cpuBeforeMs).toDouble()
-
-                val cpuPercent =
-                    if (wallElapsedMs > 0.0) {
-                        cpuElapsedMs / wallElapsedMs * 100.0
-                    } else {
-                        0.0
-                    }
-
-                val memoryInfo = Debug.MemoryInfo()
-                Debug.getMemoryInfo(memoryInfo)
-
-                val pssMb = memoryInfo.totalPss / 1024.0
-                val rssMb = readRssMb()
-
-                val bestDetection =
-                    result.detections.maxByOrNull {
-                        it.confidence
-                    }
-
-                samples.add(
-                    BenchmarkSample(
-                        bestConfidence =
-                            (bestDetection?.confidence ?: 0f).toDouble(),
-                        hasDetection =
-                            bestDetection != null,
-                        preprocessMs =
-                            result.preprocessMs,
-                        inferenceMs =
-                            result.inferenceMs,
-                        totalMs =
-                            result.totalMs,
-                        cpuPercent =
-                            cpuPercent,
-                        pssMb =
-                            pssMb,
-                        rssMb =
-                            rssMb
-                    )
-                )
-
-                // Baseline hiện tại không dùng GPU Delegate.
-                val gpuUsage = ""
-
-                val deviceColumns =
-                    listOf(
-                        csvText(deviceInfo.manufacturer),
-                        csvText(deviceInfo.model),
-                        csvText(deviceInfo.androidVersion),
-                        deviceInfo.sdkInt.toString(),
-                        csvText(deviceInfo.hardware),
-                        deviceInfo.cpuCores.toString()
-                    )
-
-                val detailRow =
-                    deviceColumns +
-                            listOf(
-                                csvText(config.id),
-                                csvText(imageName),
-                                detector.getInputSize().toString(),
-                                result.detections.size.toString(),
-                                bestDetection?.classId?.toString() ?: "-1",
-                                csvText(bestDetection?.label ?: ""),
-                                format(bestDetection?.confidence ?: 0f),
-                                format(bestDetection?.left ?: 0f),
-                                format(bestDetection?.top ?: 0f),
-                                format(bestDetection?.right ?: 0f),
-                                format(bestDetection?.bottom ?: 0f),
-                                format(result.preprocessMs),
-                                format(result.inferenceMs),
-                                format(result.totalMs),
-                                format(cpuPercent),
-                                format(pssMb),
-                                format(rssMb),
-                                format(modelSizeMb),
-                                gpuUsage,
-                                csvText(DELEGATE_NAME)
-                            )
-
-                detailCsv.append(detailRow.joinToString(","))
-                detailCsv.append("\n")
-
-                result.detections
-                    .sortedByDescending { it.confidence }
-                    .forEachIndexed { detectionIndex, detection ->
-
-                        val row =
-                            deviceColumns +
-                                    listOf(
-                                        csvText(config.id),
-                                        csvText(imageName),
-                                        detector.getInputSize().toString(),
-                                        detectionIndex.toString(),
-                                        detection.classId.toString(),
-                                        csvText(detection.label),
-                                        format(detection.confidence),
-                                        format(detection.left),
-                                        format(detection.top),
-                                        format(detection.right),
-                                        format(detection.bottom),
-                                        format(result.preprocessMs),
-                                        format(result.inferenceMs),
-                                        format(result.totalMs),
-                                        format(cpuPercent),
-                                        format(pssMb),
-                                        format(rssMb),
-                                        format(modelSizeMb),
-                                        gpuUsage,
-                                        csvText(DELEGATE_NAME)
-                                    )
-
-                        detectionsCsv.append(row.joinToString(","))
-                        detectionsCsv.append("\n")
-                    }
-
-                bitmap.recycle()
-
-                Log.d(
-                    TAG,
-                    "${config.id} [${imageIndex + 1}/${imageNames.size}] " +
-                            "infer=${"%.1f".format(result.inferenceMs)} ms, " +
-                            "cpu=${"%.1f".format(cpuPercent)}%, " +
-                            "pss=${"%.1f".format(pssMb)} MB"
-                )
-            }
-
-            val detected = samples.filter { it.hasDetection }
-
-            val detectionRate =
-                if (samples.isNotEmpty()) {
-                    detected.size * 100.0 / samples.size
-                } else {
-                    0.0
-                }
-
-            val preprocess = samples.map { it.preprocessMs }
-            val inference = samples.map { it.inferenceMs }
-            val total = samples.map { it.totalMs }
-            val cpu = samples.map { it.cpuPercent }
-            val pss = samples.map { it.pssMb }
-            val rss = samples.map { it.rssMb }
-
-            val totalMedian = median(total)
-            val estimatedFps =
-                if (totalMedian > 0.0) {
-                    1000.0 / totalMedian
-                } else {
-                    0.0
-                }
-
-            val summaryRow =
-                listOf(
-                    csvText(deviceInfo.manufacturer),
-                    csvText(deviceInfo.model),
-                    csvText(deviceInfo.androidVersion),
-                    deviceInfo.sdkInt.toString(),
-                    csvText(deviceInfo.hardware),
-                    deviceInfo.cpuCores.toString(),
-                    csvText(config.id),
-                    detector.getInputSize().toString(),
-                    samples.size.toString(),
-                    format(detectionRate),
-                    format(mean(detected.map { it.bestConfidence })),
-                    format(mean(samples.map { it.bestConfidence })),
-                    format(mean(preprocess)),
-                    format(mean(inference)),
-                    format(median(inference)),
-                    format(percentile(inference, 95.0)),
-                    format(mean(total)),
-                    format(totalMedian),
-                    format(percentile(total, 95.0)),
-                    format(estimatedFps),
-                    format(mean(cpu)),
-                    format(median(cpu)),
-                    format(percentile(cpu, 95.0)),
-                    format(mean(pss)),
-                    format(pss.maxOrNull() ?: 0.0),
-                    format(mean(rss)),
-                    format(rss.maxOrNull() ?: 0.0),
-                    format(modelSizeMb),
-                    "",
-                    csvText(DELEGATE_NAME)
-                )
-
-            summaryCsv.append(summaryRow.joinToString(","))
-            summaryCsv.append("\n")
-
-            detector.close()
-            System.gc()
-
-            if (modelIndex < ModelConfig.ALL.lastIndex) {
+            if (variantIndex < variants.lastIndex) {
                 Thread.sleep(MODEL_COOLDOWN_MS)
             }
         }
@@ -379,30 +227,21 @@ class VerificationRunner(
 
         val deviceTag = deviceInfo.fileTag()
 
-        val summaryFile =
-            "android_4model_100_summary_${deviceTag}_$timestamp.csv"
-
-        val detailFile =
-            "android_4model_100_detail_${deviceTag}_$timestamp.csv"
-
-        val detectionsFile =
-            "android_4model_100_detections_${deviceTag}_$timestamp.csv"
-
         val summaryPath =
             saveCsv(
-                summaryFile,
+                "${filePrefix}_summary_${deviceTag}_$timestamp.csv",
                 summaryCsv.toString()
             )
 
         val detailPath =
             saveCsv(
-                detailFile,
+                "${filePrefix}_detail_${deviceTag}_$timestamp.csv",
                 detailCsv.toString()
             )
 
         val detectionsPath =
             saveCsv(
-                detectionsFile,
+                "${filePrefix}_detections_${deviceTag}_$timestamp.csv",
                 detectionsCsv.toString()
             )
 
@@ -411,12 +250,255 @@ class VerificationRunner(
 
         return VerificationExportResult(
             imageCount = imageNames.size,
-            modelCount = ModelConfig.ALL.size,
+            modelCount = variants.size,
             modelSummaryPath = summaryPath,
             detailPath = detailPath,
             detectionsPath = detectionsPath,
             durationMs = durationMs
         )
+    }
+
+    // Chạy 1 tổ hợp (model, runtime) trên toàn bộ ảnh, ghi thẳng vào detail/detections CSV.
+    private fun runSingleVariant(
+        model: ModelConfig,
+        runtime: RuntimeConfig,
+        imageNames: List<String>,
+        deviceColumns: List<String>,
+        detailCsv: StringBuilder,
+        detectionsCsv: StringBuilder
+    ): VariantOutcome {
+
+        val detector =
+            LiteRTDetector(
+                context = context,
+                config = model,
+                runtimeConfig = runtime
+            )
+
+        val modelSizeMb = detector.getModelSizeMb()
+
+        val warmupBitmap = loadBitmap(imageNames.first())
+
+        repeat(WARMUP_RUNS) {
+            detector.runOnBitmap(warmupBitmap)
+            Log.d(
+                TAG,
+                "${model.id}@${runtime.label} warm-up ${it + 1}/$WARMUP_RUNS"
+            )
+        }
+
+        warmupBitmap.recycle()
+
+        // Đọc sau warm-up: nếu GPU/NNAPI fallback về CPU thì nhãn đã được cập nhật ở đây.
+        val delegateLabel = detector.appliedDelegateLabel
+
+        val samples = mutableListOf<BenchmarkSample>()
+
+        // Baseline hiện tại chưa đo GPU usage per-process (Android không có API công khai đơn giản).
+        val gpuUsage = ""
+
+        for ((imageIndex, imageName) in imageNames.withIndex()) {
+
+            val bitmap = loadBitmap(imageName)
+
+            val cpuBeforeMs = Process.getElapsedCpuTime()
+            val wallBeforeNs = System.nanoTime()
+
+            val result = detector.runOnBitmap(bitmap)
+
+            val wallAfterNs = System.nanoTime()
+            val cpuAfterMs = Process.getElapsedCpuTime()
+
+            val wallElapsedMs =
+                (wallAfterNs - wallBeforeNs) / 1_000_000.0
+
+            val cpuElapsedMs =
+                (cpuAfterMs - cpuBeforeMs).toDouble()
+
+            val cpuPercent =
+                if (wallElapsedMs > 0.0) {
+                    cpuElapsedMs / wallElapsedMs * 100.0
+                } else {
+                    0.0
+                }
+
+            val memoryInfo = Debug.MemoryInfo()
+            Debug.getMemoryInfo(memoryInfo)
+
+            val pssMb = memoryInfo.totalPss / 1024.0
+            val rssMb = readRssMb()
+
+            val bestDetection =
+                result.detections.maxByOrNull {
+                    it.confidence
+                }
+
+            samples.add(
+                BenchmarkSample(
+                    bestConfidence =
+                        (bestDetection?.confidence ?: 0f).toDouble(),
+                    hasDetection =
+                        bestDetection != null,
+                    preprocessMs =
+                        result.preprocessMs,
+                    inferenceMs =
+                        result.inferenceMs,
+                    totalMs =
+                        result.totalMs,
+                    cpuPercent =
+                        cpuPercent,
+                    pssMb =
+                        pssMb,
+                    rssMb =
+                        rssMb
+                )
+            )
+
+            val detailRow =
+                deviceColumns +
+                        listOf(
+                            csvText(model.id),
+                            csvText(imageName),
+                            detector.getInputSize().toString(),
+                            result.detections.size.toString(),
+                            bestDetection?.classId?.toString() ?: "-1",
+                            csvText(bestDetection?.label ?: ""),
+                            format(bestDetection?.confidence ?: 0f),
+                            format(bestDetection?.left ?: 0f),
+                            format(bestDetection?.top ?: 0f),
+                            format(bestDetection?.right ?: 0f),
+                            format(bestDetection?.bottom ?: 0f),
+                            format(result.preprocessMs),
+                            format(result.inferenceMs),
+                            format(result.totalMs),
+                            format(cpuPercent),
+                            format(pssMb),
+                            format(rssMb),
+                            format(modelSizeMb),
+                            gpuUsage,
+                            csvText(delegateLabel)
+                        )
+
+            detailCsv.append(detailRow.joinToString(","))
+            detailCsv.append("\n")
+
+            result.detections
+                .sortedByDescending { it.confidence }
+                .forEachIndexed { detectionIndex, detection ->
+
+                    val row =
+                        deviceColumns +
+                                listOf(
+                                    csvText(model.id),
+                                    csvText(imageName),
+                                    detector.getInputSize().toString(),
+                                    detectionIndex.toString(),
+                                    detection.classId.toString(),
+                                    csvText(detection.label),
+                                    format(detection.confidence),
+                                    format(detection.left),
+                                    format(detection.top),
+                                    format(detection.right),
+                                    format(detection.bottom),
+                                    format(result.preprocessMs),
+                                    format(result.inferenceMs),
+                                    format(result.totalMs),
+                                    format(cpuPercent),
+                                    format(pssMb),
+                                    format(rssMb),
+                                    format(modelSizeMb),
+                                    gpuUsage,
+                                    csvText(delegateLabel)
+                                )
+
+                    detectionsCsv.append(row.joinToString(","))
+                    detectionsCsv.append("\n")
+                }
+
+            bitmap.recycle()
+
+            Log.d(
+                TAG,
+                "${model.id}@${runtime.label} [${imageIndex + 1}/${imageNames.size}] " +
+                        "infer=${"%.1f".format(result.inferenceMs)} ms, " +
+                        "cpu=${"%.1f".format(cpuPercent)}%, " +
+                        "pss=${"%.1f".format(pssMb)} MB"
+            )
+        }
+
+        detector.close()
+        System.gc()
+
+        return VariantOutcome(
+            modelSizeMb = modelSizeMb,
+            delegateLabel = delegateLabel,
+            samples = samples
+        )
+    }
+
+    private fun appendSummaryRow(
+        summaryCsv: StringBuilder,
+        deviceColumns: List<String>,
+        config: ModelConfig,
+        outcome: VariantOutcome
+    ) {
+
+        val samples = outcome.samples
+        val detected = samples.filter { it.hasDetection }
+
+        val detectionRate =
+            if (samples.isNotEmpty()) {
+                detected.size * 100.0 / samples.size
+            } else {
+                0.0
+            }
+
+        val preprocess = samples.map { it.preprocessMs }
+        val inference = samples.map { it.inferenceMs }
+        val total = samples.map { it.totalMs }
+        val cpu = samples.map { it.cpuPercent }
+        val pss = samples.map { it.pssMb }
+        val rss = samples.map { it.rssMb }
+
+        val totalMedian = median(total)
+        val estimatedFps =
+            if (totalMedian > 0.0) {
+                1000.0 / totalMedian
+            } else {
+                0.0
+            }
+
+        val summaryRow =
+            deviceColumns +
+                    listOf(
+                        csvText(config.id),
+                        config.expectedInputSize.toString(),
+                        samples.size.toString(),
+                        format(detectionRate),
+                        format(mean(detected.map { it.bestConfidence })),
+                        format(mean(samples.map { it.bestConfidence })),
+                        format(mean(preprocess)),
+                        format(mean(inference)),
+                        format(median(inference)),
+                        format(percentile(inference, 95.0)),
+                        format(mean(total)),
+                        format(totalMedian),
+                        format(percentile(total, 95.0)),
+                        format(estimatedFps),
+                        format(mean(cpu)),
+                        format(median(cpu)),
+                        format(percentile(cpu, 95.0)),
+                        format(mean(pss)),
+                        format(pss.maxOrNull() ?: 0.0),
+                        format(mean(rss)),
+                        format(rss.maxOrNull() ?: 0.0),
+                        format(outcome.modelSizeMb),
+                        "",
+                        csvText(outcome.delegateLabel)
+                    )
+
+        summaryCsv.append(summaryRow.joinToString(","))
+        summaryCsv.append("\n")
     }
 
     // Tự lấy metadata của điện thoại đang benchmark.
@@ -585,7 +667,7 @@ class VerificationRunner(
     ): String {
 
         val finalContent =
-            "\uFEFF$content"
+            "﻿$content"
 
         if (
             Build.VERSION.SDK_INT >=

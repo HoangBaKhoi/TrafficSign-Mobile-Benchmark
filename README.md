@@ -11,7 +11,17 @@ Benchmark 4 model trên nhiều thiết bị Android bằng cùng bộ 100 ảnh
 
 Các chỉ số Android gồm: detection rate, mean confidence, preprocess latency, inference latency, total latency, estimated FPS, CPU usage, RAM PSS/RSS, model size và device metadata.
 
-GPU usage hiện để trống vì baseline dùng LiteRT CPU Interpreter, chưa bật GPU Delegate.
+`gpu_usage_percent` để trống vì Android không có API công khai đơn giản để đo % sử dụng GPU theo tiến trình; cột `delegate` mới là nơi phân biệt CPU/GPU/NNAPI cho từng dòng.
+
+## Quantization + Delegate sweep
+
+Ngoài baseline 4-model FP32/CPU, app còn có nút **RUN QUANT+DELEGATE SWEEP** để khảo sát:
+- Precision: FP32 (gốc) vs FP16 vs INT8 — xem `AI/notebooks/08_quantization_export.ipynb` (export) và `09_quantization_comparison.ipynb` (so sánh accuracy/size trên PC).
+- Backend suy luận: CPU 1 luồng, CPU 4 luồng, GPU Delegate, NNAPI (AI accelerator nếu thiết bị hỗ trợ).
+
+Chỉ chạy sweep trên 2 model đại diện (`yolo11n_640`, `yolo11s_640`, mỗi model 3 precision) để giữ thời gian benchmark hợp lý — không lặp lại toàn bộ 320/640 × n/s như bài test baseline. GPU Delegate được bỏ qua với bản INT8 (full-integer) vì GPU delegate không hỗ trợ tốt loại này; nếu thiết bị không hỗ trợ GPU/NNAPI, app tự fallback về CPU và ghi rõ trong cột `delegate` (vd `CPU-1T (GPU fallback)`).
+
+Kết quả lưu 3 CSV riêng, tiền tố `android_quant_sweep_*` (cùng thư mục `Downloads/TrafficSignApp/`, cùng cấu trúc cột với bộ `android_4model_100_*`).
 
 ## Cấu trúc chính
 ```text

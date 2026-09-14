@@ -29,13 +29,22 @@
         android:textColor="#FFFFFF"
         android:textSize="16sp" />
 
-    <!-- Chạy kiểm tra bằng bộ ảnh cố định -->
+    <!-- Chạy kiểm tra 4 model FP32 bằng bộ ảnh cố định (baseline) -->
     <Button
         android:id="@+id/btnVerification"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginBottom="24dp"
+        android:layout_marginBottom="88dp"
         android:text="RUN VERIFICATION" />
+
+    <!-- Chạy sweep Quantization (FP32/FP16/INT8) x Delegate (CPU/GPU/NNAPI) -->
+    <Button
+        android:id="@+id/btnQuantSweep"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="24dp"
+        android:text="RUN QUANT+DELEGATE SWEEP" />
 
 </FrameLayout>

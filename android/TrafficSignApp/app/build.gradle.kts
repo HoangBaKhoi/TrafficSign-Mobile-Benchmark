@@ -53,8 +53,14 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     // Material Components cho giao diện
     implementation(libs.material)
-    // LiteRT runtime để chạy model .tflite trên Android
-    implementation("com.google.ai.edge.litert:litert:2.1.5")
+    // LiteRT runtime để chạy model .tflite trên Android.
+    // Ghim cùng version 1.4.2 cho cả litert + litert-gpu + litert-gpu-api: litert-gpu/gpu-api
+    // chưa có bản 2.x trên Maven, nên nếu để litert lên 2.x sẽ lệch API với GpuDelegate
+    // (Interpreter.Options.addDelegate không nhận được Delegate từ litert-gpu cũ).
+    implementation("com.google.ai.edge.litert:litert:1.4.2")
+    // GPU Delegate cho LiteRT (dùng cho benchmark backend CPU/GPU/NNAPI)
+    implementation("com.google.ai.edge.litert:litert-gpu:1.4.2")
+    implementation("com.google.ai.edge.litert:litert-gpu-api:1.4.2")
 
     // Phiên bản CameraX dùng chung cho các module bên dưới
     val cameraXVersion = "1.6.1"

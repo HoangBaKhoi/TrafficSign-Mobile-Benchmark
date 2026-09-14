@@ -16,9 +16,47 @@ INPUT name=serving_default_args_0 shape=[1, 3, 320, 320] dtype=<class 'numpy.flo
 OUTPUT name=serving_default_output_0_output shape=[1, 62, 2100] dtype=<class 'numpy.float32'>
 
 ============================================================
+Model: yolo11n_640
+Input image size: 640x640
+TFLite size MiB: 10.178
+INPUT name=serving_default_args_0 shape=[1, 3, 640, 640] dtype=<class 'numpy.float32'>
+OUTPUT name=serving_default_output_0_output shape=[1, 62, 8400] dtype=<class 'numpy.float32'>
+
+============================================================
 Model: yolo11s_640
 Input image size: 640x640
 TFLite size MiB: 36.278
 INPUT name=serving_default_args_0 shape=[1, 3, 640, 640] dtype=<class 'numpy.float32'>
 OUTPUT name=serving_default_output_0_output shape=[1, 62, 8400] dtype=<class 'numpy.float32'>
+
+============================================================
+Quantization (Phase 1) — export bằng ultralytics 8.3.253 (onnx -> onnx2tf), KHÁC pipeline
+với 4 model FP32 phía trên (ai-edge-torch). Input layout NHWC [1,H,W,3] thay vì NCHW.
+LiteRTDetector.kt tự nhận diện layout theo tensor shape nên không cần đổi input_size.
+
+Model: yolo11n_640_fp16
+Input image size: 640x640
+TFLite size MiB: 5.139
+INPUT name=images shape=[1, 640, 640, 3] dtype=<class 'numpy.float32'>
+OUTPUT name=Identity shape=[1, 62, 8400] dtype=<class 'numpy.float32'>
+
+Model: yolo11n_640_int8
+Input image size: 640x640
+TFLite size MiB: 2.861
+INPUT name=images shape=[1, 640, 640, 3] dtype=<class 'numpy.float32'>
+OUTPUT name=Identity shape=[1, 62, 8400] dtype=<class 'numpy.float32'>
+Ghi chú: đây là bản "dynamic range quantization" (trọng số INT8, input/output vẫn FLOAT32) —
+onnx2tf gọi tên "_dynamic_range_quant" và ultralytics đổi tên thành "_int8" khi export.
+
+Model: yolo11s_640_fp16
+Input image size: 640x640
+TFLite size MiB: 18.191
+INPUT name=images shape=[1, 640, 640, 3] dtype=<class 'numpy.float32'>
+OUTPUT name=Identity shape=[1, 62, 8400] dtype=<class 'numpy.float32'>
+
+Model: yolo11s_640_int8
+Input image size: 640x640
+TFLite size MiB: 9.488
+INPUT name=images shape=[1, 640, 640, 3] dtype=<class 'numpy.float32'>
+OUTPUT name=Identity shape=[1, 62, 8400] dtype=<class 'numpy.float32'>
 

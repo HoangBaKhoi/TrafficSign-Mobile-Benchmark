@@ -8,6 +8,8 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.util.Log
 import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.gpu.CompatibilityList
+import org.tensorflow.lite.gpu.GpuDelegate
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -46,7 +48,8 @@ private data class LetterboxResult(
 
 class LiteRTDetector(
     private val context: Context,
-    val config: ModelConfig = ModelConfig.REALTIME_DEFAULT
+    val config: ModelConfig = ModelConfig.REALTIME_DEFAULT,
+    val runtimeConfig: RuntimeConfig = RuntimeConfig.CPU_1_THREAD
 ) {
 
     companion object {
@@ -61,6 +64,18 @@ class LiteRTDetector(
     }
 
     private var interpreter: Interpreter? = null
+
+    // Chỉ khác null khi runtimeConfig dùng GPU — cần giữ lại để close() giải phóng đúng cách.
+    private var gpuDelegate: GpuDelegate? = null
+
+    // Delegate thực tế đã áp dụng (có thể fallback về CPU nếu thiết bị không hỗ trợ GPU/NNAPI).
+    var appliedDelegateLabel: String = runtimeConfig.label
+        private set
+
+    // NCHW = ai-edge-torch (model FP32 gốc), NHWC = onnx2tf (model FP16/INT8 mới).
+    private enum class InputLayout { NCHW, NHWC }
+
+    private var inputLayout = InputLayout.NCHW
 
     // Các thông số này được đọc trực tiếp từ tensor của từng model.
     private var inputSize = 0
@@ -98,9 +113,13 @@ class LiteRTDetector(
                     config.assetFile
                 )
 
+            val options =
+                buildInterpreterOptions()
+
             interpreter =
                 Interpreter(
-                    modelBuffer
+                    modelBuffer,
+                    options
                 )
 
             val inputTensor =
@@ -117,13 +136,25 @@ class LiteRTDetector(
             val outputShape =
                 outputTensor.shape()
 
+            /*
+             * Model FP32 gốc (ai-edge-torch) xuất input dạng NCHW [1,3,H,W].
+             * Model FP16/INT8 export qua onnx2tf (ultralytics .export) lại ra NHWC [1,H,W,3].
+             * Tự nhận diện layout theo vị trí trục có độ dài = INPUT_CHANNELS để tương thích cả hai.
+             */
+            val isChannelFirst =
+                inputShape[1] == INPUT_CHANNELS &&
+                        inputShape[2] == inputShape[3]
+
+            val isChannelLast =
+                inputShape[3] == INPUT_CHANNELS &&
+                        inputShape[1] == inputShape[2]
+
             require(
                 inputShape.size == 4 &&
                         inputShape[0] == 1 &&
-                        inputShape[1] == INPUT_CHANNELS &&
-                        inputShape[2] == inputShape[3]
+                        (isChannelFirst || isChannelLast)
             ) {
-                "Input tensor không đúng dạng [1,3,H,W]: " +
+                "Input tensor không đúng dạng [1,3,H,W] hoặc [1,H,W,3]: " +
                         inputShape.contentToString()
             }
 
@@ -135,8 +166,19 @@ class LiteRTDetector(
                         outputShape.contentToString()
             }
 
+            inputLayout =
+                if (isChannelFirst) {
+                    InputLayout.NCHW
+                } else {
+                    InputLayout.NHWC
+                }
+
             inputSize =
-                inputShape[2]
+                if (isChannelFirst) {
+                    inputShape[2]
+                } else {
+                    inputShape[1]
+                }
 
             outputChannels =
                 outputShape[1]
@@ -190,6 +232,81 @@ class LiteRTDetector(
 
             throw e
         }
+    }
+
+    // Dựng Interpreter.Options theo runtimeConfig, tự fallback về CPU nếu thiết bị không hỗ trợ.
+    private fun buildInterpreterOptions(): Interpreter.Options {
+
+        val options = Interpreter.Options()
+
+        when (runtimeConfig.delegate) {
+
+            DelegateType.CPU -> {
+
+                options.setNumThreads(
+                    runtimeConfig.numThreads
+                )
+            }
+
+            DelegateType.GPU -> {
+
+                try {
+
+                    val compatList = CompatibilityList()
+
+                    val delegateOptions =
+                        if (compatList.isDelegateSupportedOnThisDevice) {
+                            compatList.bestOptionsForThisDevice
+                        } else {
+                            GpuDelegate.Options()
+                        }
+
+                    val delegate = GpuDelegate(delegateOptions)
+
+                    gpuDelegate = delegate
+
+                    options.addDelegate(delegate)
+
+                } catch (e: Exception) {
+
+                    Log.w(
+                        TAG,
+                        "${config.id}: GPU delegate không khả dụng, fallback CPU",
+                        e
+                    )
+
+                    appliedDelegateLabel = "CPU-${runtimeConfig.numThreads}T (GPU fallback)"
+
+                    options.setNumThreads(
+                        runtimeConfig.numThreads
+                    )
+                }
+            }
+
+            DelegateType.NNAPI -> {
+
+                try {
+
+                    options.setUseNNAPI(true)
+
+                } catch (e: Exception) {
+
+                    Log.w(
+                        TAG,
+                        "${config.id}: NNAPI không khả dụng, fallback CPU",
+                        e
+                    )
+
+                    appliedDelegateLabel = "CPU-${runtimeConfig.numThreads}T (NNAPI fallback)"
+
+                    options.setNumThreads(
+                        runtimeConfig.numThreads
+                    )
+                }
+            }
+        }
+
+        return options
     }
 
     // Tạo buffer đúng kích thước của model 320 hoặc 640.
@@ -268,33 +385,36 @@ class LiteRTDetector(
 
         inputBuffer.clear()
 
-        // Model dùng NCHW + normalize 0..1.
+        // Normalize 0..1, thứ tự ghi phụ thuộc layout thật của model (xem loadModel()).
+        when (inputLayout) {
 
-        // R
-        for (pixel in pixels) {
+            InputLayout.NCHW -> {
 
-            inputBuffer.putFloat(
-                Color.red(pixel) /
-                        255.0f
-            )
-        }
+                // R plane
+                for (pixel in pixels) {
+                    inputBuffer.putFloat(Color.red(pixel) / 255.0f)
+                }
 
-        // G
-        for (pixel in pixels) {
+                // G plane
+                for (pixel in pixels) {
+                    inputBuffer.putFloat(Color.green(pixel) / 255.0f)
+                }
 
-            inputBuffer.putFloat(
-                Color.green(pixel) /
-                        255.0f
-            )
-        }
+                // B plane
+                for (pixel in pixels) {
+                    inputBuffer.putFloat(Color.blue(pixel) / 255.0f)
+                }
+            }
 
-        // B
-        for (pixel in pixels) {
+            InputLayout.NHWC -> {
 
-            inputBuffer.putFloat(
-                Color.blue(pixel) /
-                        255.0f
-            )
+                // Mỗi pixel ghi liền R, G, B.
+                for (pixel in pixels) {
+                    inputBuffer.putFloat(Color.red(pixel) / 255.0f)
+                    inputBuffer.putFloat(Color.green(pixel) / 255.0f)
+                    inputBuffer.putFloat(Color.blue(pixel) / 255.0f)
+                }
+            }
         }
 
         inputBuffer.rewind()
@@ -971,6 +1091,11 @@ class LiteRTDetector(
         interpreter?.close()
 
         interpreter =
+            null
+
+        gpuDelegate?.close()
+
+        gpuDelegate =
             null
     }
 }

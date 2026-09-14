@@ -24,5 +24,8 @@ desktop.ini
 *.swp
 *.tmp
 
-# Ultralytics generated cache
+# Ultralytics generated cache / run artifacts
 *.cache
+runs/
+**/labels.cache
+1. Đề cương chi tiết Nhóm 4.docx
