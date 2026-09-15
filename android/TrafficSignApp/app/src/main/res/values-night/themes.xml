@@ -1,7 +1,12 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
     <style name="Base.Theme.TrafficSignApp" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your dark theme here. -->
-        <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
+        <item name="colorPrimary">@color/color_primary</item>
+        <item name="colorOnPrimary">@color/color_on_primary</item>
+        <item name="colorSecondary">@color/color_accent</item>
+        <item name="colorOnSecondary">@color/color_background_dark</item>
+        <item name="android:windowBackground">@color/color_background_dark</item>
+        <item name="android:statusBarColor">@color/color_background_dark</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.os.Bundle
 import android.util.Log
+import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -23,6 +24,15 @@ import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var menuGroup:
+            View
+
+    private lateinit var cameraGroup:
+            View
+
+    private lateinit var btnStart:
+            Button
+
     private lateinit var previewView:
             PreviewView
 
@@ -32,20 +42,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvFrameInfo:
             TextView
 
-    private lateinit var btnVerification:
-            Button
-
-    private lateinit var btnQuantSweep:
+    private lateinit var btnSelectModel:
             Button
 
     private lateinit var cameraExecutor:
             ExecutorService
 
-    /*
-     * Realtime mặc định dùng n640.
-     * Khi benchmark 4 model, detector này sẽ được đóng
-     * để RAM benchmark không bị cộng thêm model realtime.
-     */
     private var detector:
             LiteRTDetector? = null
 
@@ -55,9 +57,35 @@ class MainActivity : AppCompatActivity() {
     private var lastFpsTime =
         System.currentTimeMillis()
 
-    @Volatile
-    private var verificationRunning =
-        false
+    // Các chế độ realtime cho người dùng chọn (đơn giản hóa từ kết quả sweep
+    // model x delegate — xem AI/notebooks/09_quantization_comparison.ipynb).
+    private data class RealtimeMode(
+        val label: String,
+        val model: ModelConfig,
+        val runtime: RuntimeConfig
+    )
+
+    private val realtimeModes =
+        listOf(
+            RealtimeMode(
+                label = "Cân bằng (FP32, CPU)",
+                model = ModelConfig.N640,
+                runtime = RuntimeConfig.CPU_1_THREAD
+            ),
+            RealtimeMode(
+                label = "Tốc độ cao (FP16, GPU)",
+                model = ModelConfig.N640_FP16,
+                runtime = RuntimeConfig.GPU
+            ),
+            RealtimeMode(
+                label = "Tiết kiệm bộ nhớ (INT8, CPU)",
+                model = ModelConfig.N640_INT8,
+                runtime = RuntimeConfig.CPU_1_THREAD
+            )
+        )
+
+    private var currentModeIndex =
+        0
 
     private val requestCameraPermission =
         registerForActivityResult(
@@ -94,6 +122,21 @@ class MainActivity : AppCompatActivity() {
             R.layout.activity_main
         )
 
+        menuGroup =
+            findViewById(
+                R.id.menuGroup
+            )
+
+        cameraGroup =
+            findViewById(
+                R.id.cameraGroup
+            )
+
+        btnStart =
+            findViewById(
+                R.id.btnStart
+            )
+
         previewView =
             findViewById(
                 R.id.previewView
@@ -109,14 +152,9 @@ class MainActivity : AppCompatActivity() {
                 R.id.tvFrameInfo
             )
 
-        btnVerification =
+        btnSelectModel =
             findViewById(
-                R.id.btnVerification
-            )
-
-        btnQuantSweep =
-            findViewById(
-                R.id.btnQuantSweep
+                R.id.btnSelectModel
             )
 
         previewView.scaleType =
@@ -124,30 +162,38 @@ class MainActivity : AppCompatActivity() {
                 .ScaleType
                 .FILL_CENTER
 
-        // Realtime mặc định: YOLO11n-640.
-        createRealtimeDetector()
-
         cameraExecutor =
             Executors
                 .newSingleThreadExecutor()
 
-        btnVerification.text =
-            "RUN 4-MODEL TEST"
-
-        btnVerification
+        btnStart
             .setOnClickListener {
 
-                runOfflineVerification()
+                openCameraScreen()
             }
 
-        btnQuantSweep.text =
-            "RUN QUANT+DELEGATE SWEEP"
-
-        btnQuantSweep
+        btnSelectModel
             .setOnClickListener {
 
-                runQuantizationSweep()
+                showModeSelectionDialog()
             }
+    }
+
+    // =============================
+    // MÀN MENU → MÀN CAMERA
+    // =============================
+
+    private fun openCameraScreen() {
+
+        menuGroup.visibility =
+            View.GONE
+
+        cameraGroup.visibility =
+            View.VISIBLE
+
+        createRealtimeDetector(
+            realtimeModes[currentModeIndex]
+        )
 
         if (
             ContextCompat
@@ -170,240 +216,68 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun createRealtimeDetector() {
-
-        detector?.close()
-
-        detector =
-            LiteRTDetector(
-                context =
-                    this,
-
-                config =
-                    ModelConfig
-                        .REALTIME_DEFAULT
-            )
-    }
-
-    // =============================
-    // 4-MODEL / 100-IMAGE TEST
-    // =============================
-
-    private fun runOfflineVerification() {
-
-        runBenchmark(
-            targetButton = btnVerification,
-            busyText = "ĐANG TEST 4 MODEL...",
-            idleText = "RUN 4-MODEL TEST",
-            infoText = "4-MODEL BENCHMARK\n100 ảnh/model\nĐang chạy tuần tự...",
-            dialogTitle = "4-model benchmark hoàn tất",
-            failureLogTag = "4-model benchmark failed"
-        ) { runner ->
-            runner.run()
-        }
-    }
-
-    // =============================
-    // QUANTIZATION x DELEGATE SWEEP (Phase 2)
-    // =============================
-
-    private fun runQuantizationSweep() {
-
-        runBenchmark(
-            targetButton = btnQuantSweep,
-            busyText = "ĐANG CHẠY QUANT+DELEGATE...",
-            idleText = "RUN QUANT+DELEGATE SWEEP",
-            infoText = "QUANTIZATION x DELEGATE SWEEP\n" +
-                    "FP32/FP16/INT8 x CPU/GPU/NNAPI\n" +
-                    "Đang chạy tuần tự (có thể mất nhiều thời gian)...",
-            dialogTitle = "Quant+Delegate sweep hoàn tất",
-            failureLogTag = "Quant+Delegate sweep failed"
-        ) { runner ->
-            runner.runQuantizationSweep()
-        }
-    }
-
     /*
-     * Khung dùng chung cho mọi loại benchmark offline (bộ ảnh cố định, không dùng camera):
-     * khóa 2 nút bấm, đóng detector realtime để không cộng dồn RAM, chạy VerificationRunner
-     * trên cameraExecutor, rồi hiển thị kết quả/khôi phục realtime detector.
+     * Tạo/đóng detector luôn chạy trên cameraExecutor — cùng luồng với nơi
+     * analyzer gọi interpreter.run(). TFLite Interpreter không thread-safe,
+     * nên nếu đóng detector cũ từ UI thread trong lúc luồng camera đang suy
+     * luận trên nó sẽ crash native (app bị kill ngay), không phải exception
+     * Kotlin bắt được bằng try/catch.
      */
-    private fun runBenchmark(
-        targetButton: Button,
-        busyText: String,
-        idleText: String,
-        infoText: String,
-        dialogTitle: String,
-        failureLogTag: String,
-        action: (VerificationRunner) -> VerificationExportResult
+    private fun createRealtimeDetector(
+        mode: RealtimeMode
     ) {
 
-        if (
-            verificationRunning
-        ) {
-            return
-        }
-
-        verificationRunning =
-            true
-
-        btnVerification.isEnabled = false
-        btnQuantSweep.isEnabled = false
-
-        targetButton.text =
-            busyText
-
-        overlayView.setResults(
-            newDetections =
-                emptyList(),
-
-            newSourceWidth =
-                1,
-
-            newSourceHeight =
-                1
-        )
-
-        tvFrameInfo.text =
-            infoText
-
-        /*
-         * Chạy trên cùng executor với camera.
-         * Như vậy Interpreter không chạy song song với camera.
-         */
         cameraExecutor.execute {
 
-            try {
+            detector?.close()
 
-                /*
-                 * Đóng model realtime trước benchmark
-                 * để RAM benchmark không bị cộng thêm n640.
-                 */
-                detector?.close()
+            detector =
+                LiteRTDetector(
+                    context =
+                        this,
 
-                detector =
-                    null
+                    config =
+                        mode.model,
 
-                System.gc()
+                    runtimeConfig =
+                        mode.runtime
+                )
+        }
+    }
 
-                val runner =
-                    VerificationRunner(
-                        context =
-                            this
-                    )
+    private fun showModeSelectionDialog() {
 
-                val result =
-                    action(runner)
+        val labels =
+            realtimeModes
+                .map { it.label }
+                .toTypedArray()
 
-                // Sau benchmark mở lại n640 cho camera realtime.
-                createRealtimeDetector()
+        AlertDialog
+            .Builder(
+                this
+            )
+            .setTitle(
+                "Chọn chế độ nhận diện"
+            )
+            .setSingleChoiceItems(
+                labels,
+                currentModeIndex
+            ) { dialog, which ->
 
-                runOnUiThread {
+                currentModeIndex =
+                    which
 
-                    verificationRunning =
-                        false
-
-                    btnVerification.isEnabled = true
-                    btnQuantSweep.isEnabled = true
-
-                    targetButton.text =
-                        idleText
-
-                    frameCount =
-                        0
-
-                    lastFpsTime =
-                        System.currentTimeMillis()
-
-                    AlertDialog
-                        .Builder(
-                            this
-                        )
-                        .setTitle(
-                            dialogTitle
-                        )
-                        .setMessage(
-                            "Variants: ${result.modelCount}\n" +
-                                    "Ảnh/variant: ${result.imageCount}\n\n" +
-
-                                    "Model summary:\n" +
-                                    "${result.modelSummaryPath}\n\n" +
-
-                                    "Per-image detail:\n" +
-                                    "${result.detailPath}\n\n" +
-
-                                    "All detections:\n" +
-                                    "${result.detectionsPath}\n\n" +
-
-                                    "Tổng thời gian: " +
-                                    "%.1f phút".format(
-                                        result.durationMs /
-                                                60000.0
-                                    )
-                        )
-                        .setPositiveButton(
-                            "OK",
-                            null
-                        )
-                        .show()
-                }
-
-            } catch (
-                e: Exception
-            ) {
-
-                Log.e(
-                    "MainActivity",
-                    failureLogTag,
-                    e
+                createRealtimeDetector(
+                    realtimeModes[currentModeIndex]
                 )
 
-                // Cố gắng khôi phục realtime detector.
-                try {
-
-                    createRealtimeDetector()
-
-                } catch (
-                    restoreError: Exception
-                ) {
-
-                    Log.e(
-                        "MainActivity",
-                        "Không khôi phục được realtime detector",
-                        restoreError
-                    )
-                }
-
-                runOnUiThread {
-
-                    verificationRunning =
-                        false
-
-                    btnVerification.isEnabled = true
-                    btnQuantSweep.isEnabled = true
-
-                    targetButton.text =
-                        idleText
-
-                    AlertDialog
-                        .Builder(
-                            this
-                        )
-                        .setTitle(
-                            "Benchmark lỗi"
-                        )
-                        .setMessage(
-                            e.message
-                                ?: "Không xác định được lỗi"
-                        )
-                        .setPositiveButton(
-                            "OK",
-                            null
-                        )
-                        .show()
-                }
+                dialog.dismiss()
             }
-        }
+            .setNegativeButton(
+                "Hủy",
+                null
+            )
+            .show()
     }
 
     // =============================
@@ -453,15 +327,6 @@ class MainActivity : AppCompatActivity() {
                 imageAnalysis.setAnalyzer(
                     cameraExecutor
                 ) analyzer@{ imageProxy ->
-
-                    if (
-                        verificationRunning
-                    ) {
-
-                        imageProxy.close()
-
-                        return@analyzer
-                    }
 
                     val activeDetector =
                         detector
@@ -577,7 +442,8 @@ class MainActivity : AppCompatActivity() {
                             runOnUiThread {
 
                                 tvFrameInfo.text =
-                                    "Camera → ${activeDetector.config.id}\n" +
+                                    "Camera → ${activeDetector.config.id} " +
+                                            "(${activeDetector.appliedDelegateLabel})\n" +
 
                                             "${width}x${height} | " +
                                             "Rotation: ${rotation}°\n" +
@@ -719,7 +585,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
 
-        detector?.close()
+        // Đóng detector trên cùng luồng cameraExecutor, xem lý do ở createRealtimeDetector().
+        cameraExecutor.execute {
+
+            detector?.close()
+        }
 
         cameraExecutor
             .shutdown()

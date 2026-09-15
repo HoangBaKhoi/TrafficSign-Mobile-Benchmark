@@ -2,4 +2,13 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- Bảng màu riêng của app: xanh dương chủ đạo (biển báo chỉ dẫn), điểm nhấn vàng cam (biển báo cảnh báo) -->
+    <color name="color_primary">#1E88E5</color>
+    <color name="color_primary_dark">#123A63</color>
+    <color name="color_on_primary">#FFFFFFFF</color>
+    <color name="color_accent">#FFB300</color>
+    <color name="color_background_dark">#0F1C2E</color>
+    <color name="color_text_secondary">#B0BEC5</color>
+    <color name="color_panel">#CC0F1C2E</color>
 </resources>
