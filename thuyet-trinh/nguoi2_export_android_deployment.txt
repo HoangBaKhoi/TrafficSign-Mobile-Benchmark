@@ -1,0 +1,179 @@
+========================================================
+PHẦN THUYẾT TRÌNH - NGƯỜI 2: EXPORT + ANDROID DEPLOYMENT
+Thời lượng: ~5 phút | 6 slide
+========================================================
+
+CÂU MỞ ĐẦU (chuyển tiếp từ Người 1):
+"Sau khi đã có 4 model huấn luyện xong (n320, n640, s320, s640), phần của
+mình sẽ trình bày cách đưa các model này chạy thực tế trên điện thoại
+Android, và cách tụi mình kiểm chứng rằng việc đưa lên mobile không làm
+model chạy sai."
+
+
+--------------------------------------------------------
+SLIDE 1 — EXPORT MODEL (.pt → .tflite)
+Thời gian: ~45 giây
+--------------------------------------------------------
+NỘI DUNG TRÊN SLIDE:
+- Công cụ export: ai-edge-torch
+- 4 model: yolo11n_320, yolo11n_640, yolo11s_320, yolo11s_640
+- Input: NCHW [1, 3, H, W]  (H,W = 320 hoặc 640)
+- Output: [1, 62, N]  (62 = 4 tọa độ bbox + 58 class, N = 2100 hoặc 8400)
+- Kích thước file: bản "n" ~10MB, bản "s" ~36MB
+
+NÓI:
+"Model sau khi train ra định dạng .pt của PyTorch, không chạy trực tiếp
+trên điện thoại được. Tụi mình dùng công cụ ai-edge-torch để export sang
+định dạng .tflite / LiteRT — định dạng tối ưu cho thiết bị di động.
+
+Input của model giữ nguyên layout NCHW giống PyTorch gốc — tức là 3 kênh
+màu (RGB) đứng trước, rồi mới tới chiều cao và chiều rộng ảnh.
+
+Output có dạng [1, 62, N]. Số 62 này là 4 giá trị tọa độ bounding box
+(center x, center y, width, height) cộng với 58 class biển báo. Còn N là
+số lượng candidate — với ảnh input 320x320 thì có 2100 candidate, với
+640x640 thì có 8400 candidate, vì ảnh càng lớn thì lưới chia ra càng
+nhiều ô để dò tìm vật thể."
+
+
+--------------------------------------------------------
+SLIDE 2 — KIỂM TRA EXPORT KHÔNG LÀM SAI LỆCH MODEL
+Thời gian: ~30 giây
+--------------------------------------------------------
+NỘI DUNG TRÊN SLIDE:
+- So sánh output giữa bản .pt (PyTorch) và bản .tflite (LiteRT)
+- Chạy trên cùng 1 tập ảnh test
+- Kết quả: gần như giống hệt nhau
+
+NÓI:
+"Trước khi đưa lên điện thoại, tụi mình phải chắc chắn là bước export
+không làm model bị sai lệch. Nên tụi mình chạy cùng một bộ ảnh qua cả 2
+bản — bản .pt gốc và bản .tflite vừa export — rồi so sánh kết quả đầu ra.
+Kết quả cho thấy 2 bản cho ra output gần như giống hệt nhau, nghĩa là
+bước export giữ nguyên được độ chính xác của model gốc."
+
+
+--------------------------------------------------------
+SLIDE 3 — PIPELINE XỬ LÝ TRÊN ANDROID (SƠ ĐỒ)
+Thời gian: ~60 giây
+--------------------------------------------------------
+NỘI DUNG TRÊN SLIDE (sơ đồ dạng mũi tên):
+  CameraX → Bitmap → Rotation → Letterbox → Normalize (NCHW Float32)
+  → LiteRT Interpreter → Decode → NMS → Bounding box
+
+NÓI:
+"Đây là toàn bộ pipeline xử lý 1 khung hình camera cho tới khi vẽ ra
+bounding box trên màn hình, chạy hoàn toàn trên điện thoại, real-time.
+
+CameraX là thư viện camera chính thức của Google, lấy từng khung hình.
+Khung hình đó được chuyển thành Bitmap, xoay lại theo đúng chiều cảm biến
+camera (vì camera điện thoại thường lệch 90 độ so với chiều màn hình).
+
+Sau đó ảnh được đưa qua bước Letterbox — resize về đúng kích thước input
+của model (320 hoặc 640) nhưng vẫn giữ nguyên tỉ lệ khung hình gốc, phần
+dư ra được pad thêm viền màu xám để không làm méo ảnh.
+
+Ảnh được chuẩn hóa giá trị pixel về khoảng 0-1 và ghi vào bộ nhớ theo
+đúng layout NCHW, rồi đưa vào LiteRT Interpreter để suy luận.
+
+Kết quả suy luận được decode và lọc qua bước NMS trước khi vẽ bounding
+box lên màn hình."
+
+
+--------------------------------------------------------
+SLIDE 4 — PIPELINE ANDROID (CHI TIẾT KỸ THUẬT)
+Thời gian: ~60 giây
+--------------------------------------------------------
+NỘI DUNG TRÊN SLIDE:
+- Letterbox: giữ tỉ lệ, pad màu xám RGB(114,114,114)
+- Normalize: ghi buffer theo layout NCHW — toàn bộ kênh R trước,
+  rồi tới kênh G, rồi tới kênh B (khác NHWC ghi xen kẽ R-G-B từng pixel)
+- Decode: mỗi candidate → lấy class có score cao nhất, lọc theo
+  ngưỡng confidence 0.25
+- NMS: loại bounding box trùng nhau (IoU > 0.45)
+- Map tọa độ ngược lại về đúng vị trí trên ảnh gốc (đảo phép letterbox)
+
+NÓI:
+"Vài chi tiết kỹ thuật quan trọng trong pipeline này:
+
+Thứ nhất, letterbox pad bằng màu xám (114,114,114) — đây là màu tiêu
+chuẩn trong hệ sinh thái YOLO, không phải chọn tùy ý.
+
+Thứ hai, vì input là NCHW nên khi ghi dữ liệu ảnh vào buffer, tụi mình
+phải ghi toàn bộ kênh đỏ trước, rồi mới tới kênh xanh lá, rồi kênh xanh
+dương — khác với NHWC là ghi xen kẽ đỏ-xanh lá-xanh dương cho từng pixel
+một. Nếu ghi sai layout này thì model sẽ suy luận ra kết quả sai hoàn
+toàn dù không báo lỗi.
+
+Thứ ba, sau khi model trả về hàng nghìn candidate, tụi mình lọc theo
+ngưỡng độ tin cậy 25%, rồi áp dụng NMS để loại các box bị trùng lặp lên
+cùng một vật thể.
+
+Cuối cùng vì ảnh đưa vào model đã bị letterbox (resize + pad), nên bounding
+box trả về cũng phải map ngược lại đúng tỉ lệ và vị trí trên ảnh gốc thì
+mới hiển thị đúng trên preview camera."
+
+
+--------------------------------------------------------
+SLIDE 5 — VERIFICATION PC ↔ ANDROID
+Thời gian: ~45 giây
+--------------------------------------------------------
+NỘI DUNG TRÊN SLIDE:
+- Chạy cùng bộ 100 ảnh cố định trên cả PC (Python/notebook) và app Android
+- So sánh detection rate, mean confidence giữa 2 nền tảng
+- Kết quả: khớp gần như tuyệt đối
+
+NÓI:
+"Bước cuối cùng để đảm bảo pipeline Android không có bug, tụi mình chạy
+cùng một bộ 100 ảnh cố định qua cả 2 nơi: một là chạy bằng Python trên
+PC, hai là chạy trực tiếp trên app Android. Sau đó so sánh detection rate
+và độ tin cậy trung bình giữa 2 kết quả.
+
+Kết quả cho thấy 2 bên khớp gần như tuyệt đối cho tất cả 4 model — điều
+này chứng minh là toàn bộ logic decode, lọc ngưỡng, và NMS mà tụi mình
+viết lại bằng Kotlin trên Android hoạt động đúng y hệt logic gốc bên
+Python, không có sai lệch nào phát sinh khi chuyển nền tảng."
+
+
+--------------------------------------------------------
+SLIDE 6 — DEMO TRỰC TIẾP
+Thời gian: ~60 giây (chủ yếu là demo, không đọc slide)
+--------------------------------------------------------
+NỘI DUNG TRÊN SLIDE:
+- Câu dẫn ngắn, không cần nhiều chữ
+- (Chuyển qua demo trực tiếp trên điện thoại)
+
+NÓI:
+"Bây giờ mình xin demo trực tiếp app chạy trên điện thoại thật."
+→ Mở app, đưa camera vào biển báo thật, cho giám khảo thấy bounding box
+  và FPS/latency hiện realtime trên màn hình.
+
+CÂU CHUYỂN GIAO SANG NGƯỜI 3:
+"App còn hỗ trợ đổi giữa nhiều chế độ model và phần cứng chạy khác nhau
+— phần benchmark và đánh đổi giữa các chế độ này thì bạn [tên Người 3]
+sẽ trình bày kỹ hơn ngay sau đây."
+
+
+========================================================
+CÂU HỎI CÓ THỂ BỊ HỎI + GỢI Ý TRẢ LỜI
+========================================================
+
+Hỏi: Vì sao dùng layout NCHW mà không phải NHWC (chuẩn phổ biến hơn)?
+Đáp: Vì pipeline export ai-edge-torch giữ nguyên layout gốc của PyTorch
+(NCHW). Đây cũng là lý do phần Người 3 phải viết thêm code tự nhận diện
+layout, vì pipeline export FP16/INT8 sau này (qua ultralytics/onnx2tf)
+lại cho ra NHWC.
+
+Hỏi: Tại sao chọn ngưỡng confidence 0.25 và IoU 0.45?
+Đáp: Đây là ngưỡng mặc định phổ biến trong hệ sinh thái YOLO, áp dụng
+đồng nhất cho cả 4 model để đảm bảo so sánh công bằng giữa các model.
+
+Hỏi: Nếu verification PC-Android không khớp thì sao?
+Đáp: Sẽ phải rà lại từng bước trong pipeline (letterbox, normalize,
+decode, NMS) để tìm bước nào code Kotlin làm khác Python — nhưng ở đây
+tụi mình đã verify khớp nên không gặp vấn đề này.
+
+Hỏi: App có chạy được trên nhiều loại điện thoại không?
+Đáp: Có, minSdk 23 (Android 6.0 trở lên). Phần kiểm chứng đa thiết bị cụ
+thể (Samsung Galaxy A05s, Samsung SM-A336E) sẽ do Người 3 trình bày ở
+phần benchmark.
